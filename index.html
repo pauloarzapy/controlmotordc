@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Global IoT - Monitoreo de Motor DC</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; background-color: #11141a; color: #ffffff; margin-top: 40px; }
+        .container { background-color: #1e222b; padding: 40px; border-radius: 20px; display: inline-block; box-shadow: 0 15px 30px rgba(0,0,0,0.5); border: 1px solid #2d3341; }
+        h1 { color: #00bcd4; font-size: 2.2rem; margin-bottom: 5px; }
+        .badge { font-size: 12px; background: #2d3341; padding: 4px 10px; border-radius: 10px; color: #a0aab8; }
+        .btn { font-size: 20px; font-weight: bold; padding: 15px 40px; margin: 15px 10px; border: none; border-radius: 12px; cursor: pointer; color: white; transition: all 0.2s; }
+        .btn-encender { background-color: #00b894; }
+        .btn-parar { background-color: #d63031; }
+        .monitor-box { margin: 25px auto; padding: 15px; width: 80%; border-radius: 10px; font-size: 22px; font-weight: bold; text-transform: uppercase; border: 2px solid #57606f; background-color: #2f3542; transition: all 0.3s ease; }
+        .estado-quieto { color: #ced6e0; background-color: #2f3542; border-color: #57606f; }
+        .estado-adelante { color: #ffffff; background-color: #00b894; border-color: #55efc4; box-shadow: 0 0 15px rgba(0, 184, 148, 0.4); }
+        .estado-atras { color: #ffffff; background-color: #2980b9; border-color: #3498db; box-shadow: 0 0 15px rgba(41, 128, 185, 0.4); }
+        #status { font-weight: bold; font-size: 14px; color: #a0aab8; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Control y Monitoreo IoT</h1>
+        <span class="badge">Feedback Seguro - Nube EMQX</span>
+        
+        <div id="motorMonitor" class="monitor-box estado-quieto">Motor: DETENIDO</div>
+
+        <button class="btn btn-encender" onclick="publicarComando('A')">🔼 ADELANTE</button>
+        <button class="btn btn-parar" onclick="publicarComando('P')">🛑 PARAR</button>
+        <button class="btn btn-encender" style="background-color: #2980b9;" onclick="publicarComando('R')">🔽 ATRÁS</button>
+        
+        <div id="status">Red: Conectando a la nube de EMQX...</div>
+    </div>
+
+    <script>
+        // Conexión directa y nativa por WebSockets Seguros (WSS) a EMQX
+        const socketUrl = "wss://broker.emqx.io:8084/mqtt";
+        const topicControl = "limpiaparabrisas/proyecto/control";
+        const topicEstado = "limpiaparabrisas/proyecto/estado";
+        const clientId = "WebClient_" + Math.random().toString(16).substr(2, 8);
+        
+        let ws;
+
+        function conectarMQTT() {
+            ws = new WebSocket(socketUrl, "mqtt");
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = () => {
+                document.getElementById('status').innerText = "Red: Conectado a la nube segura EMQX";
+                document.getElementById('status').style.color = "#00b894";
+                
+                // Enviar paquete CONNECT de MQTT nativo
+                const connectFrame = new Uint8Array([
+                    16, 12 + clientId.length,
+                    0, 4, 77, 81, 84, 84, 4, 2, 0, 60,
+                    0, clientId.length
+                ]);
+                // Agregar el ID de cliente al paquete
+                for (let i = 0; i < clientId.length; i++) {
+                    connectFrame[14 + i] = clientId.charCodeAt(i);
+                }
+                ws.send(connectFrame);
+
+                // Suscribirse al canal de estado
+                setTimeout(() => {
+                    const subFrame = new Uint8Array([
+                        130, 5 + topicEstado.length,
+                        0, 1, 0, topicEstado.length
+                    ]);
+                    const fullSub = new Uint8Array(subFrame.length + topicEstado.length + 1);
+                    fullSub.set(subFrame);
+                    for (let i = 0; i < topicEstado.length; i++) {
+                        fullSub[6 + i] = topicEstado.charCodeAt(i);
+                    }
+                    fullSub[fullSub.length - 1] = 0; // QoS 0
+                    ws.send(fullSub);
+                }, 500);
+            };
+
+            ws.onmessage = (event) => {
+                const bytes = new Uint8Array(event.data);
+                // Detectar si es un paquete PUBLISH de MQTT
+                if ((bytes[0] & 240) === 48) {
+                    const topicLen = (bytes[2] << 8) | bytes[3];
+                    const msgBytes = bytes.subarray(4 + topicLen);
+                    const msg = new TextDecoder("utf-8").decode(msgBytes).trim();
+                    
+                    // Filtrar caracteres extraños que puedan venir en el buffer
+                    const estado = msg.replace(/[^A-Z]/g, ""); 
+                    const monitor = document.getElementById('motorMonitor');
+                    
+                    if (estado.includes("ADELANTE")) {
+                        monitor.innerText = "Motor: GIRANDO ADELANTE";
+                        monitor.className = "monitor-box estado-adelante";
+                    } else if (estado.includes("ATRAS")) {
+                        monitor.innerText = "Motor: GIRANDO ATRÁS";
+                        monitor.className = "monitor-box estado-atras";
+                    } else if (estado.includes("STOP")) {
+                        monitor.innerText = "Motor: DETENIDO";
+                        monitor.className = "monitor-box estado-quieto";
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status').innerText = "Red: Conexión perdida. Reconectando...";
+                document.getElementById('status').style.color = "#d63031";
+                setTimeout(conectarMQTT, 5000);
+            };
+        }
+
+        function publicarComando(letra) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const msgLen = letra.length;
+                const topLen = topicControl.length;
+                
+                const payload = new Uint8Array(4 + topLen + msgLen);
+                payload[0] = 48; // Tipo: PUBLISH
+                payload[1] = 2 + topLen + msgLen; // Longitud remanente
+                payload[2] = 0;
+                payload[3] = topLen; // Longitud del tema
+                
+                for (let i = 0; i < topLen; i++) {
+                    payload[4 + i] = topicControl.charCodeAt(i);
+                }
+                for (let i = 0; i < msgLen; i++) {
+                    payload[4 + topLen + i] = letra.charCodeAt(i);
+                }
+                ws.send(payload);
+            } else {
+                alert("No estás conectado a la nube todavía.");
+            }
+        }
+
+        // Iniciar la conexión automática al cargar la página
+        conectarMQTT();
+    </script>
+</body>
+</html>
