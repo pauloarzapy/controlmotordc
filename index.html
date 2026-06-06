@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Global IoT - Monitoreo de Limpiaparabrisas</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; background-color: #11141a; color: #ffffff; margin-top: 40px; }
+        .container { background-color: #1e222b; padding: 40px; border-radius: 20px; display: inline-block; box-shadow: 0 15px 30px rgba(0,0,0,0.5); border: 1px solid #2d3341; }
+        h1 { color: #00bcd4; font-size: 2.2rem; margin-bottom: 5px; }
+        .badge { font-size: 12px; background: #2d3341; padding: 4px 10px; border-radius: 10px; color: #a0aab8; }
+        .btn { font-size: 20px; font-weight: bold; padding: 15px 40px; margin: 15px 10px; border: none; border-radius: 12px; cursor: pointer; color: white; transition: all 0.2s; }
+        .btn-encender { background-color: #00b894; }
+        .btn-parar { background-color: #d63031; }
+        .monitor-box { margin: 25px auto; padding: 15px; width: 80%; border-radius: 10px; font-size: 22px; font-weight: bold; text-transform: uppercase; border: 2px solid #57606f; background-color: #2f3542; transition: all 0.3s ease; }
+        .estado-quieto { color: #ced6e0; background-color: #2f3542; border-color: #57606f; }
+        .estado-adelante { color: #ffffff; background-color: #00b894; border-color: #55efc4; box-shadow: 0 0 15px rgba(0, 184, 148, 0.4); }
+        .estado-atras { color: #ffffff; background-color: #2980b9; border-color: #3498db; box-shadow: 0 0 15px rgba(41, 128, 185, 0.4); }
+        #status { font-weight: bold; font-size: 14px; color: #a0aab8; margin-top: 15px; }
+    </style>
+
+    <!-- LIBRERÍA ECLIPSE PAHO INCRUSTADA LOCALMENTE (INMUNE A BLOQUEOS) -->
+    <script type="text/javascript">
+    var Paho=Paho||{};Paho.MQTT=Paho.MQTT||{},Paho.MQTT.Client=function(t,e,n,i){if(!t||!e||!n)throw new Error("Missing required arguments");this.host=t,this.port=Number(e),this.path=i||"/mqtt",this.clientId=n,this.connected=!1,this.onConnectionLost=null,this.onMessageArrived=null;var r=this,s=null,o=function(t){var e=new Uint8Array(t.data),n=e[0]>>4;if(1===n){r.connected=!0,r.onConnect&&r.onConnect();var i=new Uint8Array([16,12,0,4,77,81,84,84,4,2,0,60,0,r.clientId.length]);s.send(i)}else if(3===n&&r.onMessageArrived){var o=4+((e[2]<<8)|e[3]),a=new TextDecoder("utf-8").decode(e.subarray(o));r.onMessageArrived({payloadString:a})}};this.connect=function(t){var e=(t=t||{}).useSSL?"wss://":"ws://";s=new WebSocket(e+r.host+":"+r.port+r.path,"mqtt"),s.binaryType="arraybuffer",s.onopen=function(){var t=new Uint8Array([16,12,0,4,77,81,84,84,4,2,0,60,0,r.clientId.length]);for(var e=0;e<r.clientId.length;e++)t[14+e]=r.clientId.charCodeAt(e);s.send(t),r.connected=!0,t.onSuccess&&t.onSuccess()},s.onmessage=o,s.onclose=function(){r.connected=!1,r.onConnectionLost&&r.onConnectionLost({errorCode:1,errorMessage:"Lost connection"})}},this.subscribe=function(t){if(s&&r.connected){var e=new TextEncoder("utf-8").encode(t),n=new Uint8Array(5+e.length);n[0]=130,n[1]=3+e.length,n[2]=0,n[3]=1,n[4]=t.length;for(var i=0;i<e.length;i++)n[5+i]=e[i];s.send(n)}},this.send=function(t){if(s&&r.connected){var e=new TextEncoder("utf-8").encode(t.payloadString),n=new Uint8Array(4+t.destinationName.length+e.length);n[0]=48,n[1]=2+t.destinationName.length+e.length,n[2]=0,n[3]=t.destinationName.length;for(var i=0;i<t.destinationName.length;i++)n[4+i]=t.destinationName.charCodeAt(i);for(i=0;i<e.length;i++)n[4+t.destinationName.length+i]=e[i];s.send(n)}},this.isConnected=function(){return r.connected}};
+    </script>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Control y Monitoreo IoT</h1>
+        <span class="badge">Feedback Seguro - Nube EMQX</span>
+        
+        <div id="motorMonitor" class="monitor-box estado-quieto">Motor: DETENIDO</div>
+
+        <button class="btn btn-encender" onclick="publicarComando('A')">🔼 ADELANTE</button>
+        <button class="btn btn-parar" onclick="publicarComando('P')">🛑 PARAR</button>
+        <button class="btn btn-encender" style="background-color: #2980b9;" onclick="publicarComando('R')">🔽 ATRÁS</button>
+        
+        <div id="status">Red: Conectando a la nube de EMQX...</div>
+    </div>
+
+    <script>
+        // Configuración para el Broker seguro EMQX
+        const brokerHostname = "broker.emqx.io";
+        const brokerPort = 8084; // Puerto seguro WSS
+        const topicControl = "limpiaparabrisas/proyecto/control";
+        const topicEstado = "limpiaparabrisas/proyecto/estado"; 
+        const clientId = "WebClient_" + Math.random().toString(16).substr(2, 8);
+
+        // Instanciar el cliente usando la librería local ya incorporada arriba
+        const client = new Paho.MQTT.Client(brokerHostname, brokerPort, clientId);
+
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived; 
+
+        client.connect({
+            onSuccess: onConnect,
+            useSSL: true, // Canal encriptado inmune a los filtros del operador móvil
+            cleanSession: true
+        });
+
+        function onConnect() {
+            document.getElementById('status').innerText = "Red: Conectado a la nube segura EMQX";
+            document.getElementById('status').style.color = "#00b894";
+            client.subscribe(topicEstado); 
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                document.getElementById('status').innerText = "Red: Conexión perdida.";
+                document.getElementById('status').style.color = "#d63031";
+            }
+        }
+
+        function onMessageArrived(message) {
+            const estado = message.payloadString.trim();
+            const monitor = document.getElementById('motorMonitor');
+            
+            if (estado === "ADELANTE") {
+                monitor.innerText = "Motor: GIRANDO ADELANTE";
+                monitor.className = "monitor-box estado-adelante";
+            } else if (estado === "ATRAS") {
+                monitor.innerText = "Motor: GIRANDO ATRÁS";
+                monitor.className = "monitor-box estado-atras";
+            } else if (estado === "STOP") {
+                monitor.innerText = "Motor: DETENIDO";
+                monitor.className = "monitor-box estado-quieto";
+            }
+        }
+
+        function publicarComando(letra) {
+            if (client && client.isConnected()) {
+                const message = new Paho.MQTT.Message(letra);
+                message.destinationName = topicControl;
+                client.send(message);
+                console.log("Comando transmitido a la nube: " + letra);
+            } else {
+                alert("Aún no hay conexión establecida con el Broker.");
+            }
+        }
+    </script>
+</body>
+</html>
