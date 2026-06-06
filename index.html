@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Global IoT - Monitoreo de Motor DC x</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; background-color: #11141a; color: #ffffff; margin-top: 40px; }
+        .container { background-color: #1e222b; padding: 40px; border-radius: 20px; display: inline-block; box-shadow: 0 15px 30px rgba(0,0,0,0.5); border: 1px solid #2d3341; }
+        h1 { color: #00bcd4; font-size: 2.2rem; margin-bottom: 5px; }
+        .badge { font-size: 12px; background: #2d3341; padding: 4px 10px; border-radius: 10px; color: #a0aab8; }
+        .btn { font-size: 20px; font-weight: bold; padding: 15px 40px; margin: 15px 10px; border: none; border-radius: 12px; cursor: pointer; color: white; transition: all 0.2s; }
+        .btn-encender { background-color: #00b894; }
+        .btn-parar { background-color: #d63031; }
+        .monitor-box { margin: 25px auto; padding: 15px; width: 80%; border-radius: 10px; font-size: 22px; font-weight: bold; text-transform: uppercase; border: 2px solid #57606f; background-color: #2f3542; transition: all 0.3s ease; }
+        .estado-quieto { color: #ced6e0; background-color: #2f3542; border-color: #57606f; }
+        .estado-adelante { color: #ffffff; background-color: #00b894; border-color: #55efc4; box-shadow: 0 0 15px rgba(0, 184, 148, 0.4); }
+        .estado-atras { color: #ffffff; background-color: #2980b9; border-color: #3498db; box-shadow: 0 0 15px rgba(41, 128, 185, 0.4); }
+        #status { font-weight: bold; font-size: 14px; color: #a0aab8; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Control y Monitoreo IoT</h1>
+        <span class="badge">Conexión Directa por WebSockets Nativos</span>
+        
+        <div id="motorMonitor" class="monitor-box estado-quieto">Motor: DETENIDO</div>
+
+        <button class="btn btn-encender" onclick="publicarComando('A')">🔼 ADELANTE</button>
+        <button class="btn btn-parar" onclick="publicarComando('P')">🛑 PARAR</button>
+        <button class="btn btn-encender" style="background-color: #2980b9;" onclick="publicarComando('R')">🔽 ATRÁS</button>
+        
+        <div id="status">Red: Conectando a la nube de EMQX...</div>
+    </div>
+
+    <script>
+        // Usamos una conexión WebSocket directa a los servidores de EMQX sin librerías intermedias
+        const socketUrl = "wss://broker.emqx.io:8084/mqtt";
+        const topicControl = "limpiaparabrisas/proyecto/control";
+        const topicEstado = "limpiaparabrisas/proyecto/estado";
+        const clientId = "Web_" + Math.random().toString(16).substr(2, 6);
+        
+        let ws;
+
+        function iniciarConexion() {
+            // El navegador abre la tubería de red por sí solo
+            ws = new WebSocket(socketUrl, "mqtt");
+            ws.binaryType = "arraybuffer";
+
+            ws.onopen = () => {
+                document.getElementById('status').innerText = "Red: Conectado a la nube segura EMQX";
+                document.getElementById('status').style.color = "#00b894";
+                
+                // Saludo básico inicial del protocolo MQTT (Paquete CONNECT)
+                const totalLen = 12 + clientId.length;
+                const connectPacket = new Uint8Array(14 + clientId.length);
+                connectPacket.set([16, totalLen, 0, 4, 77, 81, 84, 84, 4, 2, 0, 60, 0, clientId.length]);
+                for (let i = 0; i < clientId.length; i++) {
+                    connectPacket[14 + i] = clientId.charCodeAt(i);
+                }
+                ws.send(connectPacket);
+
+                // Suscribirse al canal de estado después de medio segundo
+                setTimeout(() => {
+                    const subPacket = new Uint8Array(7 + topicEstado.length);
+                    subPacket.set([132, 5 + topicEstado.length, 0, 1, 0, topicEstado.length]);
+                    for (let i = 0; i < topicEstado.length; i++) {
+                        subPacket[6 + i] = topicEstado.charCodeAt(i);
+                    }
+                    subPacket[subPacket.length - 1] = 0; // QoS 0
+                    ws.send(subPacket);
+                }, 500);
+            };
+
+            ws.onmessage = (event) => {
+                const bytes = new Uint8Array(event.data);
+                // Si llega un paquete tipo PUBLISH de MQTT
+                if ((bytes[0] & 240) === 48) {
+                    const topicLen = (bytes[2] << 8) | bytes[3];
+                    const msgBytes = bytes.subarray(4 + topicLen);
+                    const msg = new TextDecoder("utf-8").decode(msgBytes).trim();
+                    const monitor = document.getElementById('motorMonitor');
+                    
+                    if (msg.includes("ADELANTE")) {
+                        monitor.innerText = "Motor: GIRANDO ADELANTE";
+                        monitor.className = "monitor-box estado-adelante";
+                    } else if (msg.includes("ATRAS")) {
+                        monitor.innerText = "Motor: GIRANDO ATRÁS";
+                        monitor.className = "monitor-box estado-atras";
+                    } else if (msg.includes("STOP")) {
+                        monitor.innerText = "Motor: DETENIDO";
+                        monitor.className = "monitor-box estado-quieto";
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                document.getElementById('status').innerText = "Red: Conexión perdida. Reconectando...";
+                document.getElementById('status').style.color = "#d63031";
+                setTimeout(iniciarConexion, 5000);
+            };
+        }
+
+        function publicarComando(letra) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const topLen = topicControl.length;
+                const msgLen = letra.length;
+                
+                const publishPacket = new Uint8Array(4 + topLen + msgLen);
+                publishPacket[0] = 48; // Código de publicación
+                publishPacket[1] = 2 + topLen + msgLen;
+                publishPacket[2] = 0;
+                publishPacket[3] = topLen;
+                
+                for (let i = 0; i < topLen; i++) {
+                    publishPacket[4 + i] = topicControl.charCodeAt(i);
+                }
+                for (let i = 0; i < msgLen; i++) {
+                    publishPacket[4 + topLen + i] = letra.charCodeAt(i);
+                }
+                ws.send(publishPacket);
+                console.log("Comando enviado: " + letra);
+            } else {
+                alert("Esperando conexión con el servidor...");
+            }
+        }
+
+        // Ejecutar de inmediato
+        iniciarConexion();
+    </script>
+</body>
+</html>
