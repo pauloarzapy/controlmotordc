@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Global IoT - Monitoreo de Motor DC</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; background-color: #11141a; color: #ffffff; margin-top: 40px; }
+        .container { background-color: #1e222b; padding: 40px; border-radius: 20px; display: inline-block; box-shadow: 0 15px 30px rgba(0,0,0,0.5); border: 1px solid #2d3341; }
+        h1 { color: #00bcd4; font-size: 2.2rem; margin-bottom: 5px; }
+        .badge { font-size: 12px; background: #2d3341; padding: 4px 10px; border-radius: 10px; color: #a0aab8; }
+        .btn { font-size: 20px; font-weight: bold; padding: 15px 40px; margin: 15px 10px; border: none; border-radius: 12px; cursor: pointer; color: white; transition: all 0.2s; }
+        .btn-encender { background-color: #00b894; }
+        .btn-parar { background-color: #d63031; }
+        .monitor-box { margin: 25px auto; padding: 15px; width: 80%; border-radius: 10px; font-size: 22px; font-weight: bold; text-transform: uppercase; border: 2px solid #57606f; background-color: #2f3542; transition: all 0.3s ease; }
+        .estado-quieto { color: #ced6e0; background-color: #2f3542; border-color: #57606f; }
+        .estado-adelante { color: #ffffff; background-color: #00b894; border-color: #55efc4; box-shadow: 0 0 15px rgba(0, 184, 148, 0.4); }
+        .estado-atras { color: #ffffff; background-color: #2980b9; border-color: #3498db; box-shadow: 0 0 15px rgba(41, 128, 185, 0.4); }
+        #status { font-weight: bold; font-size: 14px; color: #a0aab8; margin-top: 15px; }
+    </style>
+
+    <!-- Librería Paho MQTT incrustada localmente para evitar bloqueos -->
+    <script type="text/javascript">
+    !function(e){"object"==typeof exports&&"undefined"!=typeof module?module.exports=e():"function"==typeof define&&define.amd?define([],e):("undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof self?self:this).Paho={MQTT:e()}}(function(){return function e(t,n,r){function o(i,f){if(!n[i]){if(!t[i]){var u="function"==typeof require&&require;if(!f&&u)return u(i,!0);if(a)return a(i,!0);var c=new Error("Cannot find module '"+i+"'");throw c.code="MODULE_NOT_FOUND",c}var s=n[i]={exports:{}};t[i].call(s.exports,function(e){var n=t[i][e];return o(n?n:e)},s,s.exports,e,t,n,r)}return n[i].exports}for(var a="function"==typeof require&&require,i=0;i<r.length;i++)o(r[i]);return o}({1:[function(e,t,n){(function(e){"use strict";var n=e.Paho||{};n.MQTT=n.MQTT||{},n.MQTT.Client=function(e,t,n,r){if(!e||!t||!n)throw new Error("Missing required arguments");this.host=e,this.port=Number(t),this.path=r||"/mqtt",this.clientId=n,this.connected=!1,this.onConnectionLost=null,this.onMessageArrived=null;var o=this,a=null;this.connect=function(e){var t=e||{},r=t.useSSL?"wss://":"ws://";(a=new WebSocket(r+o.host+":"+o.port+o.path,"mqtt")).binaryType="arraybuffer",a.onopen=function(){var e=new Uint8Array([16,12,0,4,77,81,84,84,4,2,0,60,0,o.clientId.length]);a.send(e),o.connected=!0,t.onSuccess&&t.onSuccess()},a.onmessage=function(e){var t=new Uint8Array(e.data);if(48===(240&t[0])&&o.onMessageArrived){var n=t[1],r=4+t[3],a=new TextDecoder("utf-8").decode(t.subarray(r));o.onMessageArrived({payloadString:a})}},a.onclose=function(){o.connected=!1,o.onConnectionLost&&o.onConnectionLost({errorCode:1,errorMessage:"Lost connection"})}},this.send=function(e){if(a&&o.connected){var t=new TextEncoder("utf-8").encode(e.payloadString),n=new Uint8Array(4+e.destinationName.length+t.length);n[0]=48,n[1]=2+e.destinationName.length+t.length,n[2]=0,n[3]=e.destinationName.length;for(var r=0;r<e.destinationName.length;r++)n[4+r]=e.destinationName.charCodeAt(r);for(r=0;r<t.length;r++)n[4+e.destinationName.length+r]=t[r];a.send(n)}},this.subscribe=function(e){if(a&&o.connected){var t=new TextEncoder("utf-8").encode(e),n=new Uint8Array(5+t.length);n[0]=130,n[1]=3+t.length,n[2]=0,n[3]=1,n[4]=e.length;for(var r=0;r<t.length;r++)n[5+r]=t[r];a.send(n)}},this.isConnected=function(){return o.connected}},e.Paho=n}).call(this,"undefined"!=typeof global?global:"undefined"!=typeof self?self:"undefined"!=typeof window?window:{})},{}]},{},)(1)});
+    </script>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Control y Monitoreo IoT</h1>
+        <span class="badge">Feedback Seguro - Nube EMQX</span>
+        
+        <div id="motorMonitor" class="monitor-box estado-quieto">Motor: DETENIDO</div>
+
+        <button class="btn btn-encender" onclick="publicarComando('A')">🔼 ADELANTE</button>
+        <button class="btn btn-parar" onclick="publicarComando('P')">🛑 PARAR</button>
+        <button class="btn btn-encender" style="background-color: #2980b9;" onclick="publicarComando('R')">🔽 ATRÁS</button>
+        
+        <div id="status">Red: Conectando a la nube de EMQX...</div>
+    </div>
+
+    <script>
+        // Configuración para el Broker seguro EMQX
+        const brokerHostname = "broker.emqx.io";
+        const brokerPort = 8084; // Puerto seguro WSS (WebSockets Seguro)
+        const topicControl = "limpiaparabrisas/proyecto/control";
+        const topicEstado = "limpiaparabrisas/proyecto/estado"; 
+        const clientId = "WebClient_User_" + Math.random().toString(16).substr(2, 8);
+
+        const client = new Paho.MQTT.Client(brokerHostname, brokerPort, clientId);
+
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived; 
+
+        client.connect({
+            onSuccess: onConnect,
+            useSSL: true, // Forzar canal web encriptado SSL
+            cleanSession: true
+        });
+
+        function onConnect() {
+            document.getElementById('status').innerText = "Red: Conectado a la nube segura EMQX";
+            document.getElementById('status').style.color = "#00b894";
+            client.subscribe(topicEstado); 
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                document.getElementById('status').innerText = "Red: Conexión perdida.";
+                document.getElementById('status').style.color = "#d63031";
+            }
+        }
+
+        function onMessageArrived(message) {
+            const estado = message.payloadString;
+            const monitor = document.getElementById('motorMonitor');
+            
+            if (estado === "ADELANTE") {
+                monitor.innerText = "Motor: GIRANDO ADELANTE";
+                monitor.className = "monitor-box estado-adelante";
+            } else if (estado === "ATRAS") {
+                monitor.innerText = "Motor: GIRANDO ATRÁS";
+                monitor.className = "monitor-box estado-atras";
+            } else if (estado === "STOP") {
+                monitor.innerText = "Motor: DETENIDO";
+                monitor.className = "monitor-box estado-quieto";
+            }
+        }
+
+        function publicarComando(letra) {
+            if (client && client.isConnected()) {
+                const message = new Paho.MQTT.Message(letra);
+                message.destinationName = topicControl;
+                client.send(message);
+            }
+        }
+    </script>
+</body>
+</html>
