@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel Global IoT - Monitoreo de Motor DC</title>
+    
+    <!-- DESCARGA LA LIBRERÍA DESDE EL CDN SEGURO DE GITHUB (INMUNE A BLOQUEOS DE TU OPERADOR) -->
+    <script src="https://rawgit.com" type="text/javascript"></script>
+    
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; text-align: center; background-color: #11141a; color: #ffffff; margin-top: 40px; }
+        .container { background-color: #1e222b; padding: 40px; border-radius: 20px; display: inline-block; box-shadow: 0 15px 30px rgba(0,0,0,0.5); border: 1px solid #2d3341; }
+        h1 { color: #00bcd4; font-size: 2.2rem; margin-bottom: 5px; }
+        .badge { font-size: 12px; background: #2d3341; padding: 4px 10px; border-radius: 10px; color: #a0aab8; }
+        .btn { font-size: 20px; font-weight: bold; padding: 15px 40px; margin: 15px 10px; border: none; border-radius: 12px; cursor: pointer; color: white; transition: all 0.2s; }
+        .btn-encender { background-color: #00b894; }
+        .btn-parar { background-color: #d63031; }
+        .monitor-box { margin: 25px auto; padding: 15px; width: 80%; border-radius: 10px; font-size: 22px; font-weight: bold; text-transform: uppercase; border: 2px solid #57606f; background-color: #2f3542; transition: all 0.3s ease; }
+        .estado-quieto { color: #ced6e0; background-color: #2f3542; border-color: #57606f; }
+        .estado-adelante { color: #ffffff; background-color: #00b894; border-color: #55efc4; box-shadow: 0 0 15px rgba(0, 184, 148, 0.4); }
+        .estado-atras { color: #ffffff; background-color: #2980b9; border-color: #3498db; box-shadow: 0 0 15px rgba(41, 128, 185, 0.4); }
+        #status { font-weight: bold; font-size: 14px; color: #a0aab8; margin-top: 15px; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Control y Monitoreo IoT</h1>
+        <span class="badge">Feedback Seguro - Nube EMQX</span>
+        
+        <div id="motorMonitor" class="monitor-box estado-quieto">Motor: DETENIDO</div>
+
+        <button class="btn btn-encender" onclick="publicarComando('A')">🔼 ADELANTE</button>
+        <button class="btn btn-parar" onclick="publicarComando('P')">🛑 PARAR</button>
+        <button class="btn btn-encender" style="background-color: #2980b9;" onclick="publicarComando('R')">🔽 ATRÁS</button>
+        
+        <div id="status">Red: Conectando a la nube de EMQX...</div>
+    </div>
+
+    <script>
+        // Configuración para el Broker público de EMQX
+        const brokerHostname = "broker.emqx.io";
+        const brokerPort = 8084; // Puerto seguro WSS para WebSockets sobre SSL
+        const topicControl = "limpiaparabrisas/proyecto/control";
+        const topicEstado = "limpiaparabrisas/proyecto/estado"; 
+        const clientId = "WebClient_" + Math.random().toString(16).substr(2, 8);
+
+        // Inicializamos el objeto cliente oficial de la librería estable
+        const client = new Paho.MQTT.Client(brokerHostname, brokerPort, clientId);
+
+        client.onConnectionLost = onConnectionLost;
+        client.onMessageArrived = onMessageArrived; 
+
+        client.connect({
+            onSuccess: onConnect,
+            useSSL: true, // Forzar canal web encriptado SSL para burlar filtros de red
+            cleanSession: true
+        });
+
+        function onConnect() {
+            document.getElementById('status').innerText = "Red: Conectado a la nube segura EMQX";
+            document.getElementById('status').style.color = "#00b894";
+            client.subscribe(topicEstado); 
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                document.getElementById('status').innerText = "Red: Conexión perdida. Intentando reconectar...";
+                document.getElementById('status').style.color = "#d63031";
+            }
+        }
+
+        function onMessageArrived(message) {
+            const estado = message.payloadString.trim();
+            const monitor = document.getElementById('motorMonitor');
+            
+            if (estado === "ADELANTE") {
+                monitor.innerText = "Motor: GIRANDO ADELANTE";
+                monitor.className = "monitor-box estado-adelante";
+            } else if (estado === "ATRAS") {
+                monitor.innerText = "Motor: GIRANDO ATRÁS";
+                monitor.className = "monitor-box estado-atras";
+            } else if (estado === "STOP") {
+                monitor.innerText = "Motor: DETENIDO";
+                monitor.className = "monitor-box estado-quieto";
+            }
+        }
+
+        function publicarComando(letra) {
+            if (client && client.isConnected()) {
+                const message = new Paho.MQTT.Message(letra);
+                message.destinationName = topicControl;
+                client.send(message);
+                console.log("Comando enviado con éxito: " + letra);
+            } else {
+                alert("Esperando que se restablezca la conexión con la nube.");
+            }
+        }
+    </script>
+</body>
+</html>
