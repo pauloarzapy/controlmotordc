@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CONTROL MAESTRO IoT de Paulo Arza de Paraguay y su amiguito Google :)</title>
+    <style>
+        body { background-color: #121212; color: white; font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+        h1 { color: #ff9800; margin-bottom: 5px; }
+        h3 { color: #00bcd4; margin-top: 0; }
+        .panel { border: 2px solid #2196f3; padding: 15px; border-radius: 10px; display: inline-block; margin-top: 10px; background: #1a1a1a; }
+        .switch-container { margin: 15px 0; font-size: 18px; }
+        .btn { width: 70px; height: 60px; font-size: 22px; font-weight: bold; margin: 5px; border-radius: 8px; border: 2px solid white; cursor: pointer; user-select: none; -webkit-user-select: none; }
+        .btn-dir { background-color: #2196f3; color: white; }
+        .btn-trac { background-color: #4caf50; color: black; }
+        .btn-stop { background-color: #f44336; color: white; width: 148px; }
+        .btn:active { opacity: 0.6; }
+        #timer-label { font-size: 20px; color: #ffeb3b; font-weight: bold; margin-top: 15px; height: 25px; }
+        #queue-label { font-size: 14px; color: #aaaaaa; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <h1>CONTROL MAESTRO</h1>
+    <h3>Ecosistema IoT Monopatín</h3>
+
+    <div class="switch-container">
+        <label>
+            <input type="checkbox" id="modo-pasos" onchange="cambiarModo()"> 
+            <strong>ACTIVAR MODO POR PASOS</strong>
+        </label>
+    </div>
+
+    <div class="panel">
+        <div>
+            <button class="btn btn-dir" id="btn-I" onmousedown="iniciarComando('direccion','I')" onmouseup="finalizarComando('direccion','I')" ontouchstart="iniciarComando('direccion','I')" ontouchend="finalizarComando('direccion','I')">I</button>
+            <button class="btn btn-trac" id="btn-A" onmousedown="iniciarComando('traccion','A')" onmouseup="finalizarComando('traccion','A')" ontouchstart="iniciarComando('traccion','A')" ontouchend="finalizarComando('traccion','A')">A</button>
+            <button class="btn btn-trac" id="btn-R" onmousedown="iniciarComando('traccion','R')" onmouseup="finalizarComando('traccion','R')" ontouchstart="iniciarComando('traccion','R')" ontouchend="finalizarComando('traccion','R')">R</button>
+            <button class="btn btn-dir" id="btn-D" onmousedown="iniciarComando('direccion','D')" onmouseup="finalizarComando('direccion','D')" ontouchstart="iniciarComando('direccion','D')" ontouchend="finalizarComando('direccion','D')">D</button>
+        </div>
+        <div style="margin-top: 5px;">
+            <button class="btn btn-stop" id="btn-P" onclick="enviarStopFuerte()">STOP GENERAL</button>
+        </div>
+        <div id="timer-label">Tiempo: 0.00s</div>
+        <div id="queue-label">Fila de espera: 0 comandos</div>
+    </div>
+
+    <script>
+        const fb_url = "https://firebaseio.com";
+        const token = "LypQTS3a06Ejvma9qaAKGqWlbh921DwIYMIZ28Tg";
+
+        let tiempoInicio = 0;
+        let modoPasosActivo = false;
+        let filaComandos = [];
+        let procesandoFila = false;
+        let comandoActivo = null;
+
+        function cambiarModo() {
+            modoPasosActivo = document.getElementById("modo-pasos").checked;
+            let modoStr = modoPasosActivo ? "pasos" : "continuo";
+            fetch(`${fb_url}modo_operacion.json?auth=${token}`, { method: 'PUT', body: JSON.stringify(modoStr) });
+            if(!modoPasosActivo) { filaComandos = []; actualizarInterfazFila(); }
+        }
+
+        function iniciarComando(nodo, valor) {
+            if (comandoActivo) return; // Evita repeticiones raras en pantallas táctiles
+            comandoActivo = { nodo, valor };
+            tiempoInicio = performance.now();
+
+            if (!modoPasosActivo) {
+                // Modo Continuo Mejorado: Despacho síncrono ultra-rápido sin delays
+                enviarFBRapido(nodo, valor);
+            }
+        }
+
+        function finalizarComando(nodo, valor) {
+            if (!comandoActivo || comandoActivo.valor !== valor) return;
+            let tiempoFin = performance.now();
+            let duracionMs = Math.round(tiempoFin - tiempoInicio);
+            comandoActivo = null;
+
+            if (modoPasosActivo) {
+                document.getElementById("timer-label").innerText = `Último toque: ${(duracionMs/1000).toFixed(2)}s`;
+                // Mapear letra compacta para optimizar la lectura del microcontrolador
+                let letra = (nodo === "traccion") ? valor : valor; 
+                filaComandos.push(`${letra}:${duracionMs}`);
+                actualizarInterfazFila();
+                procesarSiguienteEnFila();
+            } else {
+                enviarFBRapido(nodo, "P");
+            }
+        }
+
+        // Fila cíclica para grabar múltiples toques sucesivos
+        function procesarSiguienteEnFila() {
+            if (procesandoFila || filaComandos.length === 0) return;
+            procesandoFila = true;
+
+            // Escuchar Firebase para saber cuándo la placa procesadora termina la tarea anterior
+            verificarPlacaLista().then((lista) => {
+                if (lista) {
+                    let siguiente = filaComandos.shift();
+                    actualizarInterfazFila();
+                    fetch(`${fb_url}comando_paso.json?auth=${token}`, { method: 'PUT', body: JSON.stringify(siguiente) })
+                    .then(() => {
+                        // Monitorear el nodo hasta que la placa lo vuelva a poner en "P" (Tarea cumplida)
+                        const intervalo = setInterval(() => {
+                            fetch(`${fb_url}comando_paso.json?auth=${token}`)
+                            .then(res => res.json())
+                            .then(data => {
+                                if (data === "P") {
+                                    clearInterval(intervalo);
+                                    procesandoFila = false;
+                                    procesarSiguienteEnFila();
+                                }
+                            });
+                        }, 100); // Muestreo rápido de respuesta
+                    });
+                } else {
+                    procesandoFila = false;
+                    setTimeout(procesarSiguienteEnFila, 500);
+                }
+            });
+        }
+
+        function verificarPlacaLista() {
+            return fetch(`${fb_url}comando_paso.json?auth=${token}`)
+                .then(res => res.json())
+                .then(data => data === "P");
+        }
+
+        function actualizarInterfazFila() {
+            document.getElementById("queue-label").innerText = `Fila de espera: ${filaComandos.length} comandos`;
+        }
+
+        function enviarFBRapido(nodo, valor) {
+            fetch(`${fb_url}${nodo}.json?auth=${token}`, { method: 'PUT', body: JSON.stringify(valor) });
+        }
+
+        function enviarStopFuerte() {
+            filaComandos = [];
+            actualizarInterfazFila();
+            fetch(`${fb_url}comando_paso.json?auth=${token}`, { method: 'PUT', body: JSON.stringify("P") });
+            fetch(`${fb_url}traccion.json?auth=${token}`, { method: 'PUT', body: JSON.stringify("P") });
+            fetch(`${fb_url}direccion.json?auth=${token}`, { method: 'PUT', body: JSON.stringify("P") });
+            document.getElementById("timer-label").innerText = "STOP GENERAL ENVIADO";
+        }
+    </script>
+</body>
+</html>
